@@ -143,6 +143,7 @@
 <p><img src="cover.png" alt="" /></p>
 <ul>
 <li>仓库地址: <a href="https://wa-lang.org/ugo-compiler-book/">https://wa-lang.org/ugo-compiler-book/</a></li>
+<li>示例代码: <a href="https://github.com/wa-lang/ugo">https://github.com/wa-lang/ugo</a> (和章节对应的分支)</li>
 <li>社区分享: <a href="https://wa-lang.org/ugo-compiler-book/talks/go-compiler-intro.html">Go编译器定制简介</a></li>
 </ul>
 <hr />
@@ -4026,7 +4027,7 @@ func main() {
 }
 </code></pre>
 <p>输出结果如下：</p>
-<pre><code>$ go run main.go  lex ./_examples/hello.ugo 
+<pre><code>$ go run main.go lex ./_examples/hello.ugo 
 00: package     : &quot;package&quot;            // ./_examples/hello.ugo:1:1
 01: IDENT       : &quot;main&quot;               // ./_examples/hello.ugo:1:9
 02: ;           : &quot;&quot;                   // ./_examples/hello.ugo:2:1
@@ -4049,6 +4050,305 @@ func main() {
 </code></pre>
 <p>其中<code>if</code>、<code>for</code>和等于比较运算符已经成功解析。</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="52-完善ast和解析器"><a class="header" href="#52-完善ast和解析器">5.2 完善AST和解析器</a></h1>
+<p>本节内容和前章套路类似：先准备AST然后配合新语法的解析即可。</p>
+<h2 id="521-完善ast节点"><a class="header" href="#521-完善ast节点">5.2.1 完善AST节点</a></h2>
+<p>主要是针对if和for节点，均满足<code>ast.Stmt</code>接口。if节点定义如下：</p>
+<pre><code class="language-go">// IfStmt 表示一个 if 语句节点.
+type IfStmt struct {
+	If   token.Pos  // if 关键字的位置
+	Init Stmt       // 初始化语句
+	Cond Expr       // if 条件, *BinaryExpr
+	Body *BlockStmt // if 为真时对应的语句列表
+}
+</code></pre>
+<p>字段含义如注释所示。需要注意的是uGo为了简化并没有支持else语句。</p>
+<p>for循环的AST节点如下：</p>
+<pre><code class="language-go">// ForStmt 表示一个 for 语句节点.
+type ForStmt struct {
+	For  token.Pos  // for 关键字的位置
+	Init Stmt       // 初始化语句
+	Cond Expr       // 条件表达式
+	Post Stmt       // 迭代语句
+	Body *BlockStmt // 循环对应的语句列表
+}
+</code></pre>
+<p>是一个标准的C语言风格的迭代循环。</p>
+<h2 id="522-重构-block-和-stmt-解析"><a class="header" href="#522-重构-block-和-stmt-解析">5.2.2 重构 block 和 stmt 解析</a></h2>
+<p>在第4章我们实现了对Block和多赋值的支持，在 <code>Parser.parseStmt_block</code> 方法实现。在增加if和for解析之前我们先重构简化该方法：</p>
+<pre><code class="language-go">func (p *Parser) parseStmt_block() *ast.BlockStmt {
+	...
+Loop:
+	for {
+		switch tok := p.PeekToken(); tok.Type {
+		case token.EOF:
+			break Loop
+		case token.ERROR:
+			p.errorf(tok.Pos, &quot;invalid token: %s&quot;, tok.Literal)
+		case token.SEMICOLON:
+			p.AcceptTokenList(token.SEMICOLON)
+
+		default:
+			if stmt := p.parseStmt(); stmt != nil {
+				block.List = append(block.List, stmt)
+			} else {
+				break Loop
+			}
+		}
+	}
+	...
+}
+</code></pre>
+<p>我们将正常的语句解析封装到独立的 <code>Parser.parseStmt</code> 方法实现，如果没有语句则退出循环。</p>
+<p>parseStmt 方法实现如下：</p>
+<pre><code class="language-go">func (p *Parser) parseStmt() ast.Stmt {
+	switch tok := p.PeekToken(); tok.Type {
+	...
+	case token.VAR:
+		return p.parseStmt_var()
+	case token.IF:
+		return p.parseStmt_if()
+	case token.FOR:
+		return p.parseStmt_for()
+
+	default:
+		return p.parseStmt_exprOrAssign()
+	}
+}
+</code></pre>
+<p>其中针对if和for增加了响应的解析，解析方法的实现在稍后讲述。另一个新的 <code>Parser.parseStmt_exprOrAssign</code> 方法解析表达式或多赋值语句：</p>
+<pre><code class="language-go">func (p *Parser) parseStmt_exprOrAssign() ast.Stmt {
+	// exprList ;
+	// exprList := exprList;
+	// exprList = exprList;
+	exprList := p.parseExprList()
+	switch tok := p.PeekToken(); tok.Type {
+	case token.SEMICOLON, token.LBRACE:
+		...
+	case token.DEFINE, token.ASSIGN:
+		...
+	default:
+		p.errorf(tok.Pos, &quot;unknown token: %v&quot;, tok)
+	}
+}
+</code></pre>
+<p>表达式或多赋值语句的解析代码重构之前在<code>Parser.parseStmt_block</code> 方法中 <code>switch</code> 语句的 <code>default</code> 部分实现。</p>
+<h2 id="523-if-语句解析"><a class="header" href="#523-if-语句解析">5.2.3 if 语句解析</a></h2>
+<p><code>if</code> 语句有一个可选的初始化语句，但是没有<code>else</code>分支。有以下2种情形：</p>
+<pre><code class="language-go">if x &gt; 0 {}
+if x := 1; x &gt; 0 {}
+</code></pre>
+<p><code>if</code> 解析如下：</p>
+<pre><code class="language-go">func (p *Parser) parseStmt_if() *ast.IfStmt {
+	tokIf := p.MustAcceptToken(token.IF)
+
+	ifStmt := &amp;ast.IfStmt{
+		If: tokIf.Pos,
+	}
+
+	stmt := p.parseStmt()
+	if _, ok := p.AcceptToken(token.SEMICOLON); ok {
+		ifStmt.Init = stmt
+		ifStmt.Cond = p.parseExpr()
+		ifStmt.Body = p.parseStmt_block()
+	} else {
+		ifStmt.Init = nil
+		if cond, ok := stmt.(*ast.ExprStmt); ok {
+			ifStmt.Cond = cond.X
+		} else {
+			p.errorf(tokIf.Pos, &quot;if cond expect expr: %#v&quot;, stmt)
+		}
+		ifStmt.Body = p.parseStmt_block()
+	}
+
+	return ifStmt
+}
+</code></pre>
+<p>首先通过我们新封装的 <code>parseStmt</code> 解析语句，然后根据后续 token 的类型选择不同的解析分支。如果后续的 token 是分号 <code>;</code>，则表示是有初始化语句的 <code>if init; cond {}</code> 风格的 <code>if</code>，否则是普通的 C 语言风格的 <code>if</code>。if 条件部分可能是由 <code>parseStmt</code> 方法解析得到（带初始化语句的），或者是显式调研 <code>parseExpr</code> 方法解析得到。<code>if</code> 的语句则通过 <code>parseStmt_block</code> 方法作为一个块语句解析。</p>
+<h2 id="524-for-语句解析"><a class="header" href="#524-for-语句解析">5.2.4 for 语句解析</a></h2>
+<p><code>for</code> 有以下几种情形：</p>
+<pre><code class="language-go">for {}
+for x &gt; 10 {}
+for x := 0; x &lt; 10; x = x+1 {}
+</code></pre>
+<p>下面开始解析 <code>for</code> 语句：</p>
+<pre><code class="language-go">func (p *Parser) parseStmt_for() *ast.ForStmt {
+	tokFor := p.MustAcceptToken(token.FOR)
+
+	forStmt := &amp;ast.ForStmt{
+		For: tokFor.Pos,
+	}
+
+	// for {}
+	if _, ok := p.AcceptToken(token.LBRACE); ok {
+		p.UnreadToken()
+		forStmt.Body = p.parseStmt_block()
+		return forStmt
+	}
+	...
+}
+</code></pre>
+<p>在 <code>p.MustAcceptToken(token.FOR)</code> 匹配完 <code>for</code> 关键字之后，向前查看下一个 Token 是什么类型。如果下一个 Token 是 <code>{</code> 则对应 <code>for {}</code> 风格的 <code>for</code> 语句。</p>
+<p>然后继续解析 <code>for cond {}</code> 和 <code>for Init?; Cond?; Post? {}</code> 风格的 <code>for</code> 语句：</p>
+<pre><code class="language-go">func (p *Parser) parseStmt_for() *ast.ForStmt {
+	...
+
+	// for Cond {}
+	// for Init?; Cond?; Post? {}
+
+	// for ; ...
+	if _, ok := p.AcceptToken(token.SEMICOLON); ok {
+		forStmt.Init = nil
+
+		// for ;; ...
+		if _, ok := p.AcceptToken(token.SEMICOLON); ok {
+			if _, ok := p.AcceptToken(token.LBRACE); ok {
+				// for ;; {}
+				p.UnreadToken()
+				forStmt.Body = p.parseStmt_block()
+				return forStmt
+			} else {
+				// for ; ; postStmt {}
+				forStmt.Post = p.parseStmt()
+				forStmt.Body = p.parseStmt_block()
+				return forStmt
+			}
+		} else {
+			// for ; cond ; ... {}
+			forStmt.Cond = p.parseExpr()
+			p.MustAcceptToken(token.SEMICOLON)
+			if _, ok := p.AcceptToken(token.LBRACE); ok {
+				// for ; cond ; {}
+				p.UnreadToken()
+				forStmt.Body = p.parseStmt_block()
+				return forStmt
+			} else {
+				// for ; cond ; postStmt {}
+				forStmt.Post = p.parseStmt()
+				forStmt.Body = p.parseStmt_block()
+				return forStmt
+			}
+		}
+	} else {
+		...
+	}
+	...
+}
+</code></pre>
+<p>for 的初始化语句同样是可选的，因此如果 <code>for</code> 关键字之后是 <code>;</code> 则忽略初始化部分。然后解析同样可选的 cond 和 postStmt 部分。</p>
+<p>然后是 <code>for</code> 跟着语句的情形，可能有 <code>for cond {}</code> 和 <code>for init; cond?; postStmt {}</code> 两种情况。<code>for cond {}</code>的解析如下：</p>
+<pre><code class="language-go">func (p *Parser) parseStmt_for() *ast.ForStmt {
+	...
+	// for ; ...
+	if _, ok := p.AcceptToken(token.SEMICOLON); ok {
+		...
+	} else {
+		// for expr ... {}
+		stmt := p.parseStmt()
+
+		if _, ok := p.AcceptToken(token.LBRACE); ok {
+			// for cond {}
+			p.UnreadToken()
+			if expr, ok := stmt.(ast.Expr); ok {
+				forStmt.Cond = expr
+			}
+			forStmt.Body = p.parseStmt_block()
+			return forStmt
+		} else {
+			...
+		}
+	}
+}
+</code></pre>
+<p><code>for</code> 之后唯一的表达式后如果遇到<code>{</code>则表达式作为循环的条件处理。</p>
+<p>最后是有初始化语句的情况：</p>
+<pre><code class="language-go">func (p *Parser) parseStmt_for() *ast.ForStmt {
+	...
+	// for ; ...
+	if _, ok := p.AcceptToken(token.SEMICOLON); ok {
+		...
+	} else {
+		// for expr ... {}
+		...
+		if _, ok := p.AcceptToken(token.LBRACE); ok {
+			// for cond {}
+			...
+		} else {
+			// for init;
+			p.MustAcceptToken(token.SEMICOLON)
+			forStmt.Init = stmt
+
+			...
+		}
+	}
+}
+</code></pre>
+<p>在处理完成初始化语句之后，后续的可选 cond 和 postStmt 和前忽略初始化语句的解析代码一样。</p>
+<h2 id="525-输出语法树"><a class="header" href="#525-输出语法树">5.2.5 输出语法树</a></h2>
+<p>解析以下代码：</p>
+<pre><code class="language-go">package main
+
+func main() {
+	for {
+		if 1 == 0 {}
+	}
+}
+</code></pre>
+<p>查看其语法树：</p>
+<pre><code>$ go run main.go ast ./_examples/hello.ugo
+     0  ast.File {
+     1  .  Filename: &quot;./_examples/hello.ugo&quot;
+     2  .  Source: &quot;package ...&quot;
+     3  .  Pkg: *ast.PackageSpec {
+     4  .  .  PkgPos: ./_examples/hello.ugo:1:1
+     5  .  .  NamePos: ./_examples/hello.ugo:1:9
+     6  .  .  Name: &quot;main&quot;
+     7  .  }
+     8  .  Funcs: []*ast.Func (len = 1) {
+     9  .  .  0: *ast.Func {
+    10  .  .  .  FuncPos: ./_examples/hello.ugo:3:1
+    11  .  .  .  NamePos: ./_examples/hello.ugo:3:6
+    12  .  .  .  Name: &quot;main&quot;
+    13  .  .  .  Body: *ast.BlockStmt {
+    14  .  .  .  .  Lbrace: ./_examples/hello.ugo:3:13
+    15  .  .  .  .  List: []ast.Stmt (len = 1) {
+    16  .  .  .  .  .  0: *ast.ForStmt {
+    17  .  .  .  .  .  .  For: ./_examples/hello.ugo:4:2
+    18  .  .  .  .  .  .  Body: *ast.BlockStmt {
+    19  .  .  .  .  .  .  .  Lbrace: ./_examples/hello.ugo:4:6
+    20  .  .  .  .  .  .  .  List: []ast.Stmt (len = 1) {
+    21  .  .  .  .  .  .  .  .  0: *ast.IfStmt {
+    22  .  .  .  .  .  .  .  .  .  If: ./_examples/hello.ugo:5:3
+    23  .  .  .  .  .  .  .  .  .  Cond: *ast.BinaryExpr {
+    24  .  .  .  .  .  .  .  .  .  .  OpPos: ./_examples/hello.ugo:5:8
+    25  .  .  .  .  .  .  .  .  .  .  Op: ==
+    26  .  .  .  .  .  .  .  .  .  .  X: *ast.Number {
+    27  .  .  .  .  .  .  .  .  .  .  .  ValuePos: ./_examples/hello.ugo:5:6
+    28  .  .  .  .  .  .  .  .  .  .  .  ValueEnd: ./_examples/hello.ugo:5:7
+    29  .  .  .  .  .  .  .  .  .  .  .  Value: 1
+    30  .  .  .  .  .  .  .  .  .  .  }
+    31  .  .  .  .  .  .  .  .  .  .  Y: *ast.Number {
+    32  .  .  .  .  .  .  .  .  .  .  .  ValuePos: ./_examples/hello.ugo:5:11
+    33  .  .  .  .  .  .  .  .  .  .  .  ValueEnd: ./_examples/hello.ugo:5:12
+    34  .  .  .  .  .  .  .  .  .  .  .  Value: 0
+    35  .  .  .  .  .  .  .  .  .  .  }
+    36  .  .  .  .  .  .  .  .  .  }
+    37  .  .  .  .  .  .  .  .  .  Body: *ast.BlockStmt {
+    38  .  .  .  .  .  .  .  .  .  .  Lbrace: ./_examples/hello.ugo:5:13
+    39  .  .  .  .  .  .  .  .  .  .  Rbrace: ./_examples/hello.ugo:5:14
+    40  .  .  .  .  .  .  .  .  .  }
+    41  .  .  .  .  .  .  .  .  }
+    42  .  .  .  .  .  .  .  }
+    43  .  .  .  .  .  .  .  Rbrace: ./_examples/hello.ugo:6:2
+    44  .  .  .  .  .  .  }
+    45  .  .  .  .  .  }
+    46  .  .  .  .  }
+    47  .  .  .  .  Rbrace: ./_examples/hello.ugo:7:1
+    48  .  .  .  }
+    49  .  .  }
+    50  .  }
+    51  }
+</code></pre>
+<p>其中<code>if</code>、<code>for</code>和等于比较运算符已经成功解析。</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="53-if分支到llir汇编"><a class="header" href="#53-if分支到llir汇编">5.3 if分支到LLIR汇编</a></h1>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="54-for分支到llir汇编"><a class="header" href="#54-for分支到llir汇编">5.4 for分支到LLIR汇编</a></h1>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="55-打印1到100的素数"><a class="header" href="#55-打印1到100的素数">5.5 打印1到100的素数</a></h1>
