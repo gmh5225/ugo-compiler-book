@@ -5127,7 +5127,7 @@ type SelectorExpr struct {
 }
 </code></pre>
 <p>目前<code>SelectorExpr.X</code>只有导入包的名字，也是<code>*ast.Ident</code>类型。</p>
-<h2 id="714-import语句解析"><a class="header" href="#714-import语句解析">7.1.4 import语句解析</a></h2>
+<h2 id="715-import语句解析"><a class="header" href="#715-import语句解析">7.1.5 import语句解析</a></h2>
 <pre><code class="language-go">func (p *Parser) parseFile() {
 	...
 	for {
@@ -5165,7 +5165,7 @@ func (p *Parser) parseImport() *ast.ImportSpec {
 	return importSpec
 }
 </code></pre>
-<h2 id="715-调用其他包函数解析"><a class="header" href="#715-调用其他包函数解析">7.1.5 调用其他包函数解析</a></h2>
+<h2 id="716-调用其他包函数解析"><a class="header" href="#716-调用其他包函数解析">7.1.6 调用其他包函数解析</a></h2>
 <pre><code class="language-go">func (p *Parser) parseExpr_primary() ast.Expr {
 	...
 	switch tok := p.PeekToken(); tok.Type {
@@ -5226,7 +5226,7 @@ func (p *Parser) parseImport() *ast.ImportSpec {
 	}
 }
 </code></pre>
-<h2 id="716-输出llvm-ir"><a class="header" href="#716-输出llvm-ir">7.1.6 输出LLVM-IR</a></h2>
+<h2 id="717-输出llvm-ir"><a class="header" href="#717-输出llvm-ir">7.1.7 输出LLVM-IR</a></h2>
 <pre><code class="language-go">func (p *Compiler) compileFile(w io.Writer, file *ast.File) {
 	defer p.restoreScope(p.scope)
 	p.enterScope()
@@ -5273,7 +5273,7 @@ func (p *Parser) parseImport() *ast.ImportSpec {
 	}
 }
 </code></pre>
-<h2 id="717-测试调用导入包函数"><a class="header" href="#717-测试调用导入包函数">7.1.7 测试调用导入包函数</a></h2>
+<h2 id="718-测试调用导入包函数"><a class="header" href="#718-测试调用导入包函数">7.1.8 测试调用导入包函数</a></h2>
 <p>现在可以执行本节开头的例子了：</p>
 <pre><code class="language-go">package main
 
