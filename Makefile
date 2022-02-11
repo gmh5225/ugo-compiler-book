@@ -1,6 +1,9 @@
 default:
 	mdbook serve
 
+rust:
+	make -C ugo-rust-book
+
 build:
 	-rm -rf book docs
 	mdbook build
