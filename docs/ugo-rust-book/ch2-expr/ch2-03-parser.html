@@ -141,6 +141,208 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="23-解析表达式语法树"><a class="header" href="#23-解析表达式语法树">2.3. 解析表达式语法树</a></h1>
+<p>要生成语法树需要将代码的字符序列转化为词法序列，然后再将词法序列解析为结构化的语法树。本节将开发一个简易版本的词法解析器，然后在此基础之上开发一个语法解析器，最终产生前一节的语法树。</p>
+<h2 id="231-词法解析"><a class="header" href="#231-词法解析">2.3.1 词法解析</a></h2>
+<p>在加法和减法表达式的例子我们已经实现了一个词法解析器，现在我们继续添加对<code>*/()</code>的解析支持。词法解析器一般叫lexer，我们新的函数改名为lex，在 <code>src/lex.rs</code> 文件：</p>
+<pre><code class="language-rust noplayground">pub fn lex(code: &amp;str) -&gt; Vec&lt;&amp;str&gt; {
+    let mut tokens = Vec::new();
+    let mut pos = 0;
+
+    loop {
+        let mut found_idx = None;
+        for i in pos..code.len() {
+            match &amp;code[i..][..1] {
+                &quot;+&quot; | &quot;-&quot; | &quot;*&quot; | &quot;/&quot; | &quot;(&quot; | &quot;)&quot; =&gt; {
+                    found_idx = Some(i);
+                    break;
+                }
+                _ =&gt; {}
+            }
+        }
+        if let Some(i) = found_idx {
+            if i &gt; pos {
+                tokens.push(&amp;code[pos..i]);
+            }
+            tokens.push(&amp;code[i..][..1]);
+            pos = i + 1;
+            continue;
+        }
+
+        if pos &lt; code.len() {
+            tokens.push(&amp;code[pos..]);
+        }
+        return tokens;
+    }
+    tokens
+}
+</code></pre>
+<p>增加了乘除法和小括弧的支持。目前我们暂时忽略错误的输入。开发调试的同时可以添加测试代码，如下：</p>
+<pre><code class="language-rust noplayground">#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lex_works() {
+        assert_eq!(lex(&quot;1&quot;), vec![&quot;1&quot;]);
+        assert_eq!(lex(&quot;1+22*333&quot;), vec![&quot;1&quot;, &quot;+&quot;, &quot;22&quot;, &quot;*&quot;, &quot;333&quot;]);
+        assert_eq!(
+            lex(&quot;1+22*(3+4)&quot;),
+            vec![&quot;1&quot;, &quot;+&quot;, &quot;22&quot;, &quot;*&quot;, &quot;(&quot;, &quot;3&quot;, &quot;+&quot;, &quot;4&quot;, &quot;)&quot;]
+        );
+    }
+}
+</code></pre>
+<p>目前的词法解析器虽然简陋，有了单元测试后面就可以放心重构和优化。</p>
+<h2 id="232-语法定义"><a class="header" href="#232-语法定义">2.3.2 语法定义</a></h2>
+<p>语法解析和词法解析输入类似：前者是字符序列、后者是Token序列。输出的结果少有差异：词法解析器产生的是Token扁平的序列，而语法解析产生的是结构化的语法树。</p>
+<p>目前依然复用之前的语法树结构：</p>
+<pre><code class="language-rust noplayground">#[derive(Debug)]
+pub struct ExprNode&lt;'a&gt; {
+    pub value: &amp;'a str, // +, -, *, /, 123
+    pub left: Option&lt;Box&lt;ExprNode&lt;'a&gt;&gt;&gt;,
+    pub right: Option&lt;Box&lt;ExprNode&lt;'a&gt;&gt;&gt;,
+}
+</code></pre>
+<p>为了方便测试增加了<code>#[derive(Debug)]</code>，可以用<code>println!(&quot;{:?}&quot;, node)</code>方式打印语法树。</p>
+<p>在解析语法之前需要明确定义语法规则，下面是EBNF表示的四则运算规则：</p>
+<pre><code class="language-bnf">expr    = mul (&quot;+&quot; mul | &quot;-&quot; mul)*
+mul     = primary (&quot;*&quot; primary | &quot;/&quot; primary)*
+primary = num | &quot;(&quot; expr &quot;)&quot;
+</code></pre>
+<p>可以将EBNF看作是正则表达式的增强版本，其中<code>|</code>表示或、<code>()</code>表示组合、<code>*</code>表示0或多个。比如 expr 规则表示了由 mul 表示的乘法元素再次通过加法或减法组合（隐含了乘法有更高的优先级）。mul 则定义了如何通过 primary 实现乘法或除法组合。而 primary 则表示更小更不可分的数字或小括弧包含的表达式元素。</p>
+<h2 id="233-手工递归下降解析"><a class="header" href="#233-手工递归下降解析">2.3.3 手工递归下降解析</a></h2>
+<p>有了EBNF参考之后我们就可以很容易手写一个递归下降的解析程序。手写定义一个parser解析器对象，其中包含词法序列和当前处理的pos位置。</p>
+<pre><code class="language-rust noplayground">pub struct Parser&lt;'a&gt; {
+    tokens: &amp;'a Vec&lt;&amp;'a str&gt;,
+    pos: std::cell::Cell&lt;usize&gt;,
+}
+
+impl&lt;'a&gt; Parser&lt;'a&gt; {
+    pub fn new(tokens: &amp;'a Vec&lt;&amp;str&gt;) -&gt; Self {
+        Self {
+            tokens: tokens,
+            pos: std::cell::Cell::new(0),
+        }
+    }
+    pub fn build(&amp;self) -&gt; Option&lt;Box&lt;crate::ast::ExprNode&gt;&gt; {
+        self.build_expr()
+    }
+}
+</code></pre>
+<p>为了简化Rust的生命周期大坑，我们用<code>std::cell::Cell</code>表示解析器内部的可变属性。同时提供new方法构造解析器对象，提供build方法构造语法树。</p>
+<p>定义了2个辅助方法：peek_token 预取下个元素，next_token则是移动到下个元素。</p>
+<pre><code class="language-rust noplayground">impl&lt;'a&gt; Parser&lt;'a&gt; {
+    fn peek_token(&amp;self) -&gt; &amp;str {
+        if self.pos.get() &lt; self.tokens.len() {
+            return self.tokens[self.pos.get()];
+        }
+        &quot;&quot;
+    }
+    fn next_token(&amp;self) {
+        if self.pos.get() &lt; self.tokens.len() {
+            self.pos.set(self.pos.get() + 1);
+        }
+    }
+}
+</code></pre>
+<p>然后参考3个规则定义3个有着相同结构的递归函数，每个函数递归构造出语法树：</p>
+<pre><code class="language-rust noplayground">impl&lt;'a&gt; Parser&lt;'a&gt; {
+    fn build_expr(&amp;self) -&gt; Option&lt;Box&lt;crate::ast::ExprNode&gt;&gt; {
+        let x = self.build_mul();
+        match self.peek_token() {
+            &quot;+&quot; =&gt; {
+                self.next_token();
+                let y = self.build_mul();
+
+                return Some(Box::new(crate::ast::ExprNode {
+                    value: &quot;+&quot;,
+                    left: x,
+                    right: y,
+                }));
+            }
+            &quot;-&quot; =&gt; {
+                self.next_token();
+                let y = self.build_mul();
+
+                return Some(Box::new(crate::ast::ExprNode {
+                    value: &quot;-&quot;,
+                    left: x,
+                    right: y,
+                }));
+            }
+            _ =&gt; {
+                return x;
+            }
+        }
+    }
+
+    fn build_mul(&amp;self) -&gt; Option&lt;Box&lt;crate::ast::ExprNode&gt;&gt; {
+        let x = self.build_primary();
+        match self.peek_token() {
+            &quot;*&quot; =&gt; {
+                self.next_token();
+                let y = self.build_primary();
+
+                return Some(Box::new(crate::ast::ExprNode {
+                    value: &quot;*&quot;,
+                    left: x,
+                    right: y,
+                }));
+            }
+            &quot;/&quot; =&gt; {
+                self.next_token();
+                let y = self.build_primary();
+
+                return Some(Box::new(crate::ast::ExprNode {
+                    value: &quot;/&quot;,
+                    left: x,
+                    right: y,
+                }));
+            }
+            _ =&gt; {
+                return x;
+            }
+        }
+    }
+    fn build_primary(&amp;self) -&gt; Option&lt;Box&lt;crate::ast::ExprNode&gt;&gt; {
+        let tok = self.peek_token();
+        match tok {
+            &quot;(&quot; =&gt; {
+                self.next_token();
+                let x = self.build_expr();
+                self.next_token();
+                return x;
+            }
+            _ =&gt; {
+                self.next_token();
+                return Some(Box::new(crate::ast::ExprNode {
+                    value: tok,
+                    left: None,
+                    right: None,
+                }));
+            }
+        }
+    }
+}
+</code></pre>
+<h2 id="234-构造测试"><a class="header" href="#234-构造测试">2.3.4 构造测试</a></h2>
+<p>然后可以构造一个例子测试语法树的解析：</p>
+<pre><code class="language-rust noplayground">fn main() {
+    let tokens = crate::lex::lex(&quot;1+2*(3+4)&quot;);
+
+    let parser = crate::parser::Parser::new(&amp;tokens);
+    let node = parser.build();
+	println!(&quot;{:?}&quot;,node);
+}
+</code></pre>
+<p>输出的如下：</p>
+<pre><code>$ cargo run
+   Compiling ugo v0.1.0 (/Users/chai/go/src/github.com/wa-lang/ugo-rs)
+    Finished dev [unoptimized + debuginfo] target(s) in 1.22s
+     Running `target/debug/ugo`
+Some(ExprNode { value: &quot;+&quot;, left: Some(ExprNode { value: &quot;1&quot;, left: None, right: None }), right: Some(ExprNode { value: &quot;*&quot;, left: Some(ExprNode { value: &quot;2&quot;, left: None, right: None }), right: Some(ExprNode { value: &quot;+&quot;, left: Some(ExprNode { value: &quot;3&quot;, left: None, right: None }), right: Some(ExprNode { value: &quot;4&quot;, left: None, right: None }) }) }) })
+</code></pre>
+<p>然后结合前一节的AST到LLVM的编译函数就可以实现表达式到可执行程序的翻译了。</p>
 
                     </main>
 
