@@ -229,7 +229,7 @@ impl Compiler {
     }
 }
 </code></pre>
-<p>其中 <code>Compiler.gen_value</code> 方法用于边缘每个内部节点，并返回结果：</p>
+<p>其中 <code>Compiler.gen_value</code> 方法用于遍历每个内部节点，并返回结果：</p>
 <pre><code class="language-rust noplayground">impl Compiler {
     fn gen_value(&amp;mut self, output: &amp;mut String, node: &amp;crate::ast::ExprNode) -&gt; String {
         let id = self.gen_id();

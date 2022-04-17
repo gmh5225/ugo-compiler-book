@@ -162,7 +162,7 @@ define void @main() {
 
 @main.count.$type = ....
 </code></pre>
-<p>其中<code>@main.count</code>可以表示为<code>main</code>包下面的<code>count</code>全局变量，而<code>@std.math.pi</code>可以表示为<code>std.math</code>包下面的<code>pi</code>变量。最后的<code>@main.count.$type</code>带有<code>$</code>字符，可以用户表示和<code>count</code>全局变量相关的其它信息。</p>
+<p>其中<code>@main.count</code>可以表示为<code>main</code>包下面的<code>count</code>全局变量，而<code>@std.math.pi</code>可以表示为<code>std.math</code>包下面的<code>pi</code>变量。最后的<code>@main.count.$type</code>带有<code>$</code>字符，可以用于表示和<code>count</code>全局变量相关的其它信息。</p>
 <p>关于全局变量的其它细节可以暂时忽略，在后文会详细解释。</p>
 <h4 id="局部标识符"><a class="header" href="#局部标识符">局部标识符</a></h4>
 <p>除了全局标识符之外还有局部标识符。局部标识符主要用于表示函数的参数和函数内局部变量（局部变量可以对应未寄存器）。下面是局部标识符的一些例子：</p>
