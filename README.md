@@ -1,9 +1,7 @@
 # 《µGo语言实现——从头开发一个迷你Go语言编译器》
 
-----
-
-- [蚂蚁 - 可信原生技术部 - 云原生运维专家(杭州P7-8)](https://github.com/chai2010/chai2010/blob/master/jobs.md)
-- [蚂蚁 - 可信原生技术部 - 专用编程语言设计研发(杭州P7-8)](https://github.com/chai2010/chai2010/blob/master/jobs.md)
+- *KusonStack一站式可编程配置技术栈: [https://github.com/KusionStack/kusion](https://github.com/KusionStack/kusion)*
+- *凹语言™: [https://github.com/wa-lang/wa](https://github.com/wa-lang/wa)*
 
 ----
 
@@ -19,12 +17,6 @@
 - 社区分享: [Go编译器定制简介](https://wa-lang.org/ugo-compiler-book/talks/go-compiler-intro.html)
 
 ---
-
-## Why: 凹(读音Wa)坑的起因
-
-- 因为坑就在那里
-- 凹坑的工具差不多齐全了
-- ？
 
 ## What: µGo 例子
 
